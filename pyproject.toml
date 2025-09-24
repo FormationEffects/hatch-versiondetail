@@ -1,0 +1,31 @@
+[project]
+name = "hatch-versiondetail"
+version = "0.1.0"
+description = "Full versioning details for Hatch projects"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "hatchling>=1.27.0",
+    "importlib-metadata>=8.7.0",
+    "loguru>=0.7.3",
+    "packaging>=25.0",
+    "tomli>=2.2.1",
+    "Nuitka",
+
+]
+
+
+#[project.script
+#versiondetail = "versiondetail.__main__:main"
+[project.entry-points.hatch]
+versiondetail = "versiondetail.hooks"
+
+
+
+
+
+
+
+
+
+
