@@ -2,6 +2,9 @@
 
 A Hatch plugin for building versions from source files, Git metadata, source hashes, and reproducible UTC timestamps.
 
+Initially used internally to release updates, without having to continually version up patches, minor, and major versions.
+Released publically for anyone else to use within their own projects.
+
 ## Requirements
 
 - Python 3.11 or newer
@@ -183,6 +186,11 @@ Build the package:
 ```console
 uv build
 ```
+
+## AI Note
+
+Initial code creation was created without the use of AI.
+AI, specifically GPT 5.6 Sol (light) was used for sanity checks, and additional documentation writing.
 
 ## License
 
