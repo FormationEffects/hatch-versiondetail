@@ -1,31 +1,107 @@
+[build-system]
+requires = ["hatchling>=1.32.4"]
+build-backend = "hatchling.build"
+
 [project]
 name = "hatch-versiondetail"
-version = "0.1.0"
-description = "Full versioning details for Hatch projects"
+version = "0.2.0"
+description = "A Hatch version source using files, Git metadata, and build timestamps"
 readme = "README.md"
-requires-python = ">=3.9"
-dependencies = [
-    "hatchling>=1.27.0",
-    "importlib-metadata>=8.7.0",
-    "loguru>=0.7.3",
-    "packaging>=25.0",
-    "tomli>=2.2.1",
-    "Nuitka",
-
+requires-python = ">=3.11"
+authors = [
+    { name = "Jaron Wilding", email = "jaron@formationeffects.com" },
+]
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
 ]
 
+dependencies = [
+    "hatchling>=1.32.4",
+    "packaging>=26.3",
+]
 
-#[project.script
-#versiondetail = "versiondetail.__main__:main"
+[project.urls]
+Source = "https://github.com/FormationEffects/hatch-versiondetail"
+Issues = "https://github.com/FormationEffects/hatch-versiondetail/issues"
+
+[project.optional-dependencies]
+nuitka = [
+    "nuitka>=4.2.2",
+]
+
 [project.entry-points.hatch]
 versiondetail = "versiondetail.hooks"
 
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.9",
+    "ty>=0.0.84",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/versiondetail"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 160
+indent-width = 4
+
+[tool.ruff.lint]
+select = [
+    "F",        # Pyflakes rules
+    "W",        # PyCodeStyle warnings
+    "E",        # PyCodeStyle errors
+    "I",        # Sort imports properly
+    "UP",       # Warn if certain things can changed due to newer Python versions
+    "C4",       # Catch incorrect use of comprehensions, dict, list, etc
+    "FA",       # Enforce from __future__ import annotations
+    "ISC",      # Good use of string concatenation
+    "ICN",      # Use common import conventions
+    "RET",      # Good return practices
+    "SIM",      # Common simplification rules
+    "TID",      # Some good import practices
+    "TC",       # Enforce importing certain types in a TYPE_CHECKING block
+    "PTH",      # Use pathlib instead of os.path
+    "TD",       # Be diligent with TODO comments
+    "NPY",      # Some numpy-specific things
+    "D",        # Enforce docstyle
+]
+
+ignore = [
+    # "D102",     # Missing docstring in public method
+    "D105",     # Missing docstring in magic method
+    "D107",     # Missing docstring in __init__
+    "TD003"     # Missing issue link for this TODO
+]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+default-section = "third-party"
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+ignore-var-parameters = true
+
+[tool.ruff.format]
+quote-style = "double"
+line-ending = "auto"
+skip-magic-trailing-comma = false
 
 
-
-
-
-
-
-
-
+[tool.ty.rules]
+unused-ignore-comment = "warn"
+redundant-cast = "ignore"
+possibly-missing-attribute = "error"
+possibly-missing-import = "error"

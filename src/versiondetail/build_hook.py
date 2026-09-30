@@ -1,186 +1,129 @@
-import os
+"""Compile package modules with Nuitka during Hatch wheel builds."""
+
+from __future__ import annotations
+
+import importlib.util
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, final
 
-from hatchling.bridge.app import Application
-from hatchling.builders.config import BuilderConfigBound
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
-from hatchling.metadata.core import ProjectMetadata
-
-from versiondetail.version_source import VersionDetailVersionSource
 
 
+@final
 class VersionDetailBuildHook(BuildHookInterface):
+    """Optionally compile Python modules for wheel builds."""
+
     PLUGIN_NAME = "versiondetail"
 
-    def __init__(self, root: str, config: dict[str, Any], build_config: BuilderConfigBound, metadata: ProjectMetadata, directory: str, target_name: str, app: Application | None = None) -> None:
-        super().__init__(root, config, build_config, metadata, directory, target_name, app)
-        self.__output_dir: Path | None = None
-
     @property
-    def output_dir(self) -> Path:
-        """Get the output directory for the build."""
-        if self.__output_dir is None:
-            self.__output_dir = Path(self.root, "build", "nuitka")
-        return self.__output_dir
+    def output_directory(self) -> Path:
+        """Return the directory containing generated extension modules."""
+        return Path(self.root, "build", "versiondetail-nuitka")
 
-    @property
-    def artifact_patterns(self) -> list[str]:
-        """Get the patterns for the artifacts produced by this build hook."""
-        return ["**/*.whl", "**/*.tar.gz"]
+    def clean(self, versions: list[str]) -> None:
+        """Remove generated Nuitka artifacts."""
+        del versions
+        shutil.rmtree(self.output_directory, ignore_errors=True)
 
-    def get_inclusion_map(self) -> dict[str, str]:
-        """Get the inclusion map for the build artifacts."""
-        inclusion_map = {}
-        for path in self.output_dir.glob("*"):
-            inclusion_map[str(path)] = str(path.relative_to(self.output_dir))
+    def _getPackages(self) -> list[str]:
+        """Return the configured packages to compile."""
+        packages = self.config.get("packages", [])
 
-        return inclusion_map
+        if not isinstance(packages, list) or not all(isinstance(package, str) and package for package in packages):
+            raise TypeError("Option 'packages' must be a list of package names.")
 
-    def compile_module(self, package: str, output_dir: Path, source_path: Path) -> subprocess.Popen:
-        """Compile the package as a module using Nuikta."""
+        if not packages:
+            raise ValueError("Nuitka compilation requires at least one package.")
 
-        args = [
+        return packages
+
+    def _getExtraArguments(self) -> list[str]:
+        """Return additional arguments passed directly to Nuitka."""
+        arguments = self.config.get("nuitka-args", [])
+
+        if not isinstance(arguments, list) or not all(isinstance(argument, str) for argument in arguments):
+            raise TypeError("Option 'nuitka-args' must be a list of strings.")
+
+        return arguments
+
+    def _findCompiledModule(self, output_dir: Path, module_name: str) -> Path:
+        """Find the extension module produced by Nuitka."""
+        candidates = [path for path in output_dir.glob(f"{module_name}.*") if path.suffix in {".pyd", ".so"}]
+
+        if len(candidates) != 1:
+            raise RuntimeError(f"Expected one compiled module for {module_name!r}, found {len(candidates)} in {output_dir}.")
+
+        return candidates[0]
+
+    def _compileModule(self, source_file: Path, output_dir: Path, extra_arguments: list[str]) -> Path:
+        """Compile one Python module with Nuitka."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        command = [
+            sys.executable,
+            "-m",
+            "nuitka",
             "--module",
-            f"{package}",
-            f"--include-package={package}",
-            f"--include-package-data={package}",
+            str(source_file),
             f"--output-dir={output_dir}",
             "--remove-output",
+            "--no-pyi-file",
+            *extra_arguments,
         ]
 
-        self.app.display_info("[VERSIONDETAIL:BUILD] | Compiling as module with Nuikta...")
-        process = subprocess.Popen([sys.executable, "-m", "nuitka", *args], cwd=source_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)  # nosec
+        self.app.display_info(f"[versiondetail] Compiling {source_file}")
 
-        while True:
-            if not process.stdout:
-                break
+        subprocess.run(command, cwd=source_file.parent, check=True)
 
-            line = process.stdout.readline()
-
-            if not line:
-                break
-
-            self.app.display_info(f"[VERSIONDETAIL:BUILD:NUITKA] | {line.strip()}")
-        # Remove .py files to exclude them from the wheel
-
-        process.wait()
-
-        for py_file in output_dir.rglob("*.py"):
-            self.app.display_info(f"[VERSIONDETAIL:BUILD] | Removing source file: {py_file}")
-            py_file.unlink()
-
-        return process
-
-    def compile_all_modules(self, package: str, output_dir: Path, src_path: Path) -> tuple[int, str]:
-        """
-        Recursively compile all .py files in the package directory tree.
-        """
-
-        """Compile single files in the package using Nuitka."""
-        py_files = [p for p in src_path.rglob("*.py")]
-
-        for file in py_files:
-            parent_dir = file.parent
-            parent_dir.mkdir(parents=True, exist_ok=True)
-
-            args = [
-                "--module",
-                f"{package}",
-                f"--output-dir={output_dir}",
-                "--remove-output",
-            ]
-            subprocess.run([sys.executable, "-m", "nuitka", *args, str(file)], check=True, cwd=parent_dir)  # nosec
-
-        print("[DEBUG NUITKA] Compiling single files:", py_files)
-        return 0, "Nuitka single file compilation not implemented yet."
+        return self._findCompiledModule(output_dir, source_file.stem)
 
     def initialize(self, version: str, build_data: dict[str, Any]) -> None:
-        """
-        Called before the build process starts.
-        """
-
-        if self.target_name != "wheel":
-            return
-
-        if os.environ.get("UV_SKIP_HOOKS") == "1":
+        """Compile configured packages before building a wheel."""
+        if self.target_name != "wheel" or version == "editable":
             return
 
         compile_source = self.config.get("compile", False)
-        build_mode = self.config.get("build_mode", "module")
-        packages = self.config.get("packages", [])
-        source_path = self.config.get("working-directory", "src")
+
+        if not isinstance(compile_source, bool):
+            raise TypeError("Option 'compile' must be a boolean.")
 
         if not compile_source:
             return
 
-        self.app.display_info(f"[VERSIONDETAIL:BUILD] | Initializing Nuikta build hook for version: {version}")
+        if importlib.util.find_spec("nuitka") is None:
+            raise RuntimeError("Nuitka compilation requires 'hatch-versiondetail[nuitka]'.")
 
-        src_path = Path(self.root, source_path)
+        working_directory = self.config.get("working-directory", "src")
+        if not isinstance(working_directory, str):
+            raise TypeError("Option 'working-directory' must be a string.")
 
-        if not packages:
-            candidates = [dir for dir in src_path.iterdir() if dir.is_dir()]
-            if not candidates:
-                raise RuntimeError(f"No source directories found in {src_path}. Please specify a 'package' in the configuration.")
-            packages = [str(dir.name) for dir in candidates]
+        source_root = Path(self.root, working_directory).resolve()
+        extra_arguments = self._getExtraArguments()
+        force_include: dict[str, str] = {}
 
-        for package in packages:
-            source_path = src_path / package
-            if not source_path.exists() or not source_path.is_dir():
-                self.app.display_error(f"[VERSIONDETAIL:BUILD] | Source path {source_path} does not exist or is not a directory.")
-                continue
+        self.clean([])
 
-            output_dir = self.output_dir / package
-            output_dir.mkdir(parents=True, exist_ok=True)
+        for package in self._getPackages():
+            package_path = (source_root / package).resolve()
 
-            if build_mode == "standalone":
-                self.compile_standalone(package, output_dir, source_path)
-            elif build_mode == "module":
-                self.compile_module(package, output_dir, src_path)
-            elif build_mode == "custom":
-                self.compile_all_modules(package, output_dir, src_path)
-            else:
-                raise ValueError(f"Invalid build mode '{build_mode}' specified. Must be one of: 'standalone', 'module', 'custom'.")
+            if not package_path.is_relative_to(source_root) or not package_path.is_dir():
+                raise ValueError(f"Package directory does not exist: {package_path}")
 
-            self.app.display_info(f"[VERSIONDETAIL:BUILD] | Successfully compiled {package} with Nuikta.")
+            source_files = sorted(path for path in package_path.rglob("*.py") if path.name != "__init__.py")
 
-        self.app.display_info("[VERSIONDETAIL:BUILD] | Build hook initialized successfully.")
+            if not source_files:
+                raise ValueError(f"Package contains no compilable modules: {package}")
 
+            for source_file in source_files:
+                relative_parent = source_file.parent.relative_to(source_root)
+                output_dir = self.output_directory / relative_parent
+                compiled_module = self._compileModule(source_file, output_dir, extra_arguments)
+                wheel_path = (relative_parent / compiled_module.name).as_posix()
+                force_include[str(compiled_module)] = wheel_path
+
+        build_data["force_include"].update(force_include)
         build_data["infer_tag"] = True
         build_data["pure_python"] = False
-        build_data["artifacts"].extend(self.artifact_patterns)
-        build_data["force_include"] = self.get_inclusion_map()
-
-        print(f"[VERSIONDETAIL] | Build data: {build_data}")
-
-        # if not isinstance(version_source, VersionDetailVersionSource):
-        #     self.app.display_warning(f"Versiondetail build hook should only be used with 'versiondetail' version source, but found {self.metadata.hatch.version.source_name!r}.")
-        #     version_source = VersionDetailVersionSource(self.root, self.metadata.hatch.version.config)
-
-    # def finalize(self, version: str, build_data: dict[str, Any], artifact_path: str) -> None:
-    #     #     """
-    #     print(f"[VERSIONDETAIL] | Tag B: {build_data.get('tag', 'N/A')}")
-    #     print(f"[VERSIONDETAIL] | Build Data B: {build_data}")
-    #     build_data["tag"] = "custom-tag"
-
-    #     Called after the wheel metadata and files have been prepared,
-    #     but before the wheel file is finalized.
-    #     """
-    #     if self.target_name == "wheel" and version == "editable":
-    #         print("Not running onbuild step for editable build")
-    #         return None
-
-    #     version_source = self.metadata.hatch.version.source
-
-    #     if not isinstance(version_source, VersionDetailVersionSource):
-    #         raise RuntimeError(f"versiondetail-onbuild can only be used with 'versiondetail' version source, but version source is {self.metadata.hatch.version.source_name!r}")
-
-    #     template_fields = version_source.get_template_fields()
-    #     if template_fields is None:
-    #         print("Appear to be building from an sdist; not running onbuild step")
-    #         return
-
-    #     print(f"[VERSIONDETAIL] | Running build hook for version: {version_source}")
